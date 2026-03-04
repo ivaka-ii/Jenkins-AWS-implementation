@@ -1,11 +1,15 @@
 # ---------------------------------------------------------------------------
 # GitLab CI/CD — Jenkins ECS/Fargate Platform
 # ---------------------------------------------------------------------------
-# Required CI/CD variables (Settings > CI/CD > Variables):
-#   AWS_ACCESS_KEY_ID      – IAM credentials with deploy permissions
-#   AWS_SECRET_ACCESS_KEY  – IAM credentials with deploy permissions
-#   AWS_ACCOUNT_ID         – AWS account ID (e.g. 038340334660)
+# AWS credentials can be provided in two ways:
+#   1. CI/CD Variables (Settings > CI/CD > Variables) — for automatic runs
+#   2. Pipeline input parameters — when running pipeline manually
 # ---------------------------------------------------------------------------
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 stages:
   - validate
@@ -16,10 +20,22 @@ stages:
   - secret-detection
 
 variables:
-  AWS_DEFAULT_REGION: eu-central-1
-  PROJECT_NAME: jenkins-ecs
+  AWS_DEFAULT_REGION:
+    value: "eu-central-1"
+    description: "AWS region to deploy to"
+  AWS_ACCESS_KEY_ID:
+    value: ""
+    description: "AWS Access Key ID (leave empty to use CI/CD variable)"
+  AWS_SECRET_ACCESS_KEY:
+    value: ""
+    description: "AWS Secret Access Key (leave empty to use CI/CD variable)"
+  AWS_ACCOUNT_ID:
+    value: "038340334660"
+    description: "AWS Account ID"
+  PROJECT_NAME:
+    value: "jenkins-ecs"
+    description: "Project name prefix for all resources"
   TF_IN_AUTOMATION: "true"
-  TERRAFORM_VERSION: "1.9.8"
 
 # ---------------------------------------------------------------------------
 # Reusable hidden jobs
@@ -55,9 +71,6 @@ validate:terraform:
         terraform validate
         terraform fmt -check -diff
       done
-  rules:
-    - if: $CI_MERGE_REQUEST_ID
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 # ---------------------------------------------------------------------------
 # Stage: build-agent — build & push Docker agent image to ECR
@@ -82,9 +95,7 @@ build:agent-image:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
-        - docker/jenkins-agent/**/*
-
-# ---------------------------------------------------------------------------
+        - docker/jenkins-agent/**/*# ---------------------------------------------------------------------------
 # Stage: plan — Terraform plan per layer (merge requests & main)
 # ---------------------------------------------------------------------------
 plan:bootstrap:
@@ -97,9 +108,6 @@ plan:bootstrap:
   artifacts:
     paths: [terraform/00-bootstrap/tfplan]
     expire_in: 1 hour
-  rules:
-    - if: $CI_MERGE_REQUEST_ID
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 plan:jenkins-platform:
   stage: plan
@@ -111,9 +119,6 @@ plan:jenkins-platform:
   artifacts:
     paths: [terraform/01-jenkins-platform/tfplan]
     expire_in: 1 hour
-  rules:
-    - if: $CI_MERGE_REQUEST_ID
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 plan:agents:
   stage: plan
@@ -125,9 +130,6 @@ plan:agents:
   artifacts:
     paths: [terraform/02-agents/tfplan]
     expire_in: 1 hour
-  rules:
-    - if: $CI_MERGE_REQUEST_ID
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 plan:app-infra:
   stage: plan
@@ -143,9 +145,6 @@ plan:app-infra:
   artifacts:
     paths: [terraform/03-app-infra/tfplan]
     expire_in: 1 hour
-  rules:
-    - if: $CI_MERGE_REQUEST_ID
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 # ---------------------------------------------------------------------------
 # Stage: apply — deploy on main branch only (manual trigger)
