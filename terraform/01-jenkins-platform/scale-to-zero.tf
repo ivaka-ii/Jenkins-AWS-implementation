@@ -41,7 +41,7 @@ resource "aws_lambda_function" "scale_to_zero" {
 
   environment {
     variables = {
-      INSTANCE_ID  = aws_instance.jenkins_controller.id
+      INSTANCE_ID   = aws_instance.jenkins_controller.id
       TARGET_REGION = var.aws_region
     }
   }

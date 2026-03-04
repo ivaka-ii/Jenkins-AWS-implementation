@@ -8,7 +8,7 @@ data "aws_iam_policy_document" "deploy_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
-      type        = "AWS"
+      type = "AWS"
       identifiers = [
         "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-agent-task"
       ]

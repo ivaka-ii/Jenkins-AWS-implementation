@@ -24,9 +24,9 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = var.project_name
-      Layer       = "bootstrap"
-      ManagedBy   = "terraform"
+      Project   = var.project_name
+      Layer     = "bootstrap"
+      ManagedBy = "terraform"
     }
   }
 }
