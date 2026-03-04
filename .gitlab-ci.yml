@@ -1,19 +1,219 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
+# ---------------------------------------------------------------------------
+# GitLab CI/CD — Jenkins ECS/Fargate Platform
+# ---------------------------------------------------------------------------
+# Required CI/CD variables (Settings > CI/CD > Variables):
+#   AWS_ACCESS_KEY_ID      – IAM credentials with deploy permissions
+#   AWS_SECRET_ACCESS_KEY  – IAM credentials with deploy permissions
+#   AWS_ACCOUNT_ID         – AWS account ID (e.g. 038340334660)
+# ---------------------------------------------------------------------------
+
 stages:
-- test
-- secret-detection
-sast:
-  stage: test
-include:
-- template: Security/SAST.gitlab-ci.yml
-- template: Security/Secret-Detection.gitlab-ci.yml
+  - validate
+  - build-agent
+  - plan
+  - apply
+
 variables:
-  SECRET_DETECTION_ENABLED: 'true'
-secret_detection:
-  stage: secret-detection
+  AWS_DEFAULT_REGION: eu-central-1
+  PROJECT_NAME: jenkins-ecs
+  TF_IN_AUTOMATION: "true"
+  TERRAFORM_VERSION: "1.9.8"
+
+# ---------------------------------------------------------------------------
+# Reusable hidden jobs
+# ---------------------------------------------------------------------------
+.terraform_base:
+  image:
+    name: hashicorp/terraform:1.9
+    entrypoint: [""]
+  before_script:
+    - export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+    - terraform version
+
+.tf_init: &tf_init
+  - terraform init
+      -backend-config="bucket=${PROJECT_NAME}-terraform-state"
+      -backend-config="region=${AWS_DEFAULT_REGION}"
+      -backend-config="dynamodb_table=${PROJECT_NAME}-terraform-locks"
+      -backend-config="encrypt=true"
+      -reconfigure
+
+# ---------------------------------------------------------------------------
+# Stage: validate — lint & validate all layers
+# ---------------------------------------------------------------------------
+validate:terraform:
+  stage: validate
+  extends: .terraform_base
+  script:
+    - |
+      for layer in 00-bootstrap 01-jenkins-platform 02-agents 03-app-infra; do
+        echo "=== Validating terraform/${layer} ==="
+        cd ${CI_PROJECT_DIR}/terraform/${layer}
+        terraform init -backend=false
+        terraform validate
+        terraform fmt -check -diff
+      done
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------
+# Stage: build-agent — build & push Docker agent image to ECR
+# ---------------------------------------------------------------------------
+build:agent-image:
+  stage: build-agent
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    ECR_REPO: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${PROJECT_NAME}/jenkins-agent
+  before_script:
+    - apk add --no-cache aws-cli
+    - aws ecr get-login-password --region ${AWS_DEFAULT_REGION}
+        | docker login --username AWS --password-stdin
+          ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+  script:
+    - docker build -t ${ECR_REPO}:${CI_COMMIT_SHORT_SHA} -t ${ECR_REPO}:latest docker/jenkins-agent/
+    - docker push ${ECR_REPO}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${ECR_REPO}:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - docker/jenkins-agent/**/*
+
+# ---------------------------------------------------------------------------
+# Stage: plan — Terraform plan per layer (merge requests & main)
+# ---------------------------------------------------------------------------
+plan:bootstrap:
+  stage: plan
+  extends: .terraform_base
+  script:
+    - cd terraform/00-bootstrap
+    - *tf_init
+    - terraform plan -out=tfplan
+  artifacts:
+    paths: [terraform/00-bootstrap/tfplan]
+    expire_in: 1 hour
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+plan:jenkins-platform:
+  stage: plan
+  extends: .terraform_base
+  script:
+    - cd terraform/01-jenkins-platform
+    - *tf_init
+    - terraform plan -out=tfplan
+  artifacts:
+    paths: [terraform/01-jenkins-platform/tfplan]
+    expire_in: 1 hour
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+plan:agents:
+  stage: plan
+  extends: .terraform_base
+  script:
+    - cd terraform/02-agents
+    - *tf_init
+    - terraform plan -out=tfplan
+  artifacts:
+    paths: [terraform/02-agents/tfplan]
+    expire_in: 1 hour
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+plan:app-infra:
+  stage: plan
+  extends: .terraform_base
+  variables:
+    ENVIRONMENT: dev
+  script:
+    - cd terraform/03-app-infra
+    - terraform init
+        -backend-config="envs/${ENVIRONMENT}.backend.hcl"
+        -reconfigure
+    - terraform plan -var="aws_region=${AWS_DEFAULT_REGION}" -out=tfplan
+  artifacts:
+    paths: [terraform/03-app-infra/tfplan]
+    expire_in: 1 hour
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------
+# Stage: apply — deploy on main branch only (manual trigger)
+# ---------------------------------------------------------------------------
+apply:bootstrap:
+  stage: apply
+  extends: .terraform_base
+  script:
+    - cd terraform/00-bootstrap
+    - *tf_init
+    - terraform apply -auto-approve tfplan
+  dependencies: [plan:bootstrap]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  environment:
+    name: bootstrap
+
+apply:jenkins-platform:
+  stage: apply
+  extends: .terraform_base
+  needs: [apply:bootstrap]
+  script:
+    - cd terraform/01-jenkins-platform
+    - *tf_init
+    - terraform apply -auto-approve tfplan
+  dependencies: [plan:jenkins-platform]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  environment:
+    name: jenkins-platform
+
+apply:agents:
+  stage: apply
+  extends: .terraform_base
+  needs: [apply:jenkins-platform]
+  script:
+    - cd terraform/02-agents
+    - *tf_init
+    - terraform apply -auto-approve tfplan
+  dependencies: [plan:agents]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  environment:
+    name: agents
+
+apply:app-infra:
+  stage: apply
+  extends: .terraform_base
+  needs: [apply:agents]
+  variables:
+    ENVIRONMENT: dev
+  script:
+    - cd terraform/03-app-infra
+    - terraform init
+        -backend-config="envs/${ENVIRONMENT}.backend.hcl"
+        -reconfigure
+    - terraform apply -auto-approve tfplan
+  dependencies: [plan:app-infra]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  environment:
+    name: app-infra/$ENVIRONMENT
+
+# ---------------------------------------------------------------------------
+# Security scanning (GitLab built-in templates)
+# ---------------------------------------------------------------------------
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
