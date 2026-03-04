@@ -34,6 +34,9 @@ variables:
   PROJECT_NAME:
     value: "jenkins-ecs"
     description: "Project name prefix for all resources"
+  ENVIRONMENT:
+    value: "dev"
+    description: "Target environment to deploy to (dev, stage, prod)"
   TF_IN_AUTOMATION: "true"
 
 # ---------------------------------------------------------------------------
@@ -149,7 +152,7 @@ plan:app-infra:
     - terraform init
         -backend-config="envs/${ENVIRONMENT}.backend.hcl"
         -reconfigure
-    - terraform plan -var="aws_region=${AWS_DEFAULT_REGION}" -out=tfplan
+    - terraform plan -var="aws_region=${AWS_DEFAULT_REGION}" -var="environment=${ENVIRONMENT}" -out=tfplan
   artifacts:
     paths: [terraform/03-app-infra/tfplan]
     expire_in: 1 hour
@@ -225,8 +228,6 @@ apply:app-infra:
     - job: plan:app-infra
       artifacts: true
     - job: apply:agents
-  variables:
-    ENVIRONMENT: dev
   script:
     - cd terraform/03-app-infra
     - terraform init

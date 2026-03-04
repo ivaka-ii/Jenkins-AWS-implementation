@@ -8,8 +8,8 @@ variable "project_name" {
   default = "jenkins-ecs"
 }
 
-variable "environments" {
-  description = "List of deployment environments"
-  type        = list(string)
-  default     = ["dev", "stage", "prod"]
+variable "environment" {
+  description = "Deployment environment (e.g. dev, stage, prod)"
+  type        = string
+  default     = "dev"
 }

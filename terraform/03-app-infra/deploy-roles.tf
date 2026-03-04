@@ -1,10 +1,8 @@
 # ---------------------------------------------------------------------------
-# Per-environment deploy roles
-# Jenkins agents assume these roles to deploy into each environment.
+# Per-environment deploy role
+# Jenkins agents assume this role to deploy into the environment.
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "deploy_assume" {
-  for_each = toset(var.environments)
-
   statement {
     actions = ["sts:AssumeRole"]
     principals {
@@ -22,20 +20,17 @@ data "aws_iam_policy_document" "deploy_assume" {
 }
 
 resource "aws_iam_role" "deploy" {
-  for_each = toset(var.environments)
-
-  name               = "${var.project_name}-deploy-${each.key}"
-  assume_role_policy = data.aws_iam_policy_document.deploy_assume[each.key].json
+  name               = "${var.project_name}-deploy-${var.environment}"
+  assume_role_policy = data.aws_iam_policy_document.deploy_assume.json
 
   tags = {
-    Environment = each.key
+    Environment = var.environment
   }
 }
 
 # Attach PowerUserAccess for deployments (scope down per your needs)
 resource "aws_iam_role_policy_attachment" "deploy_power_user" {
-  for_each   = toset(var.environments)
-  role       = aws_iam_role.deploy[each.key].name
+  role       = aws_iam_role.deploy.name
   policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
 }
 
@@ -57,8 +52,8 @@ data "aws_iam_policy_document" "deny_iam_prod" {
 }
 
 resource "aws_iam_role_policy" "deny_iam_prod" {
-  count  = contains(var.environments, "prod") ? 1 : 0
+  count  = var.environment == "prod" ? 1 : 0
   name   = "deny-iam-mutations"
-  role   = aws_iam_role.deploy["prod"].id
+  role   = aws_iam_role.deploy.id
   policy = data.aws_iam_policy_document.deny_iam_prod.json
 }
