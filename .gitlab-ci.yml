@@ -15,6 +15,7 @@ stages:
   - validate
   - build-agent
   - plan
+  - approve
   - apply
   - test
   - secret-detection
@@ -122,7 +123,9 @@ plan:jenkins-platform:
     - *tf_init
     - terraform plan -out=tfplan
   artifacts:
-    paths: [terraform/01-jenkins-platform/tfplan]
+    paths:
+      - terraform/01-jenkins-platform/tfplan
+      - terraform/01-jenkins-platform/lambda/scale_to_zero.zip
     expire_in: 1 hour
 
 plan:agents:
@@ -152,12 +155,26 @@ plan:app-infra:
     expire_in: 1 hour
 
 # ---------------------------------------------------------------------------
-# Stage: apply — deploy on main branch only (manual trigger)
+# Stage: approve — single manual gate before applying all layers
+# ---------------------------------------------------------------------------
+approve:apply:
+  stage: approve
+  image: alpine:latest
+  script:
+    - echo "Apply approved — proceeding with all Terraform layers."
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: false
+
+# ---------------------------------------------------------------------------
+# Stage: apply — deploy on main branch only (runs after approval)
 # ---------------------------------------------------------------------------
 apply:bootstrap:
   stage: apply
   extends: .terraform_base
   needs:
+    - job: approve:apply
     - job: plan:bootstrap
       artifacts: true
   script:
@@ -166,7 +183,6 @@ apply:bootstrap:
     - terraform apply -auto-approve tfplan
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
   environment:
     name: bootstrap
 
@@ -177,14 +193,12 @@ apply:jenkins-platform:
     - job: plan:jenkins-platform
       artifacts: true
     - job: apply:bootstrap
-      optional: true
   script:
     - cd terraform/01-jenkins-platform
     - *tf_init
     - terraform apply -auto-approve tfplan
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
   environment:
     name: jenkins-platform
 
@@ -195,14 +209,12 @@ apply:agents:
     - job: plan:agents
       artifacts: true
     - job: apply:jenkins-platform
-      optional: true
   script:
     - cd terraform/02-agents
     - *tf_init
     - terraform apply -auto-approve tfplan
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
   environment:
     name: agents
 
@@ -213,7 +225,6 @@ apply:app-infra:
     - job: plan:app-infra
       artifacts: true
     - job: apply:agents
-      optional: true
   variables:
     ENVIRONMENT: dev
   script:
@@ -224,7 +235,6 @@ apply:app-infra:
     - terraform apply -auto-approve tfplan
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
   environment:
     name: app-infra/$ENVIRONMENT
 
