@@ -151,11 +151,13 @@ plan:app-infra:
 apply:bootstrap:
   stage: apply
   extends: .terraform_base
+  needs:
+    - job: plan:bootstrap
+      artifacts: true
   script:
     - cd terraform/00-bootstrap
     - *tf_init
     - terraform apply -auto-approve tfplan
-  dependencies: [plan:bootstrap]
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
@@ -165,12 +167,15 @@ apply:bootstrap:
 apply:jenkins-platform:
   stage: apply
   extends: .terraform_base
-  needs: [apply:bootstrap]
+  needs:
+    - job: plan:jenkins-platform
+      artifacts: true
+    - job: apply:bootstrap
+      optional: true
   script:
     - cd terraform/01-jenkins-platform
     - *tf_init
     - terraform apply -auto-approve tfplan
-  dependencies: [plan:jenkins-platform]
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
@@ -180,12 +185,15 @@ apply:jenkins-platform:
 apply:agents:
   stage: apply
   extends: .terraform_base
-  needs: [apply:jenkins-platform]
+  needs:
+    - job: plan:agents
+      artifacts: true
+    - job: apply:jenkins-platform
+      optional: true
   script:
     - cd terraform/02-agents
     - *tf_init
     - terraform apply -auto-approve tfplan
-  dependencies: [plan:agents]
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
@@ -195,7 +203,11 @@ apply:agents:
 apply:app-infra:
   stage: apply
   extends: .terraform_base
-  needs: [apply:agents]
+  needs:
+    - job: plan:app-infra
+      artifacts: true
+    - job: apply:agents
+      optional: true
   variables:
     ENVIRONMENT: dev
   script:
@@ -204,7 +216,6 @@ apply:app-infra:
         -backend-config="envs/${ENVIRONMENT}.backend.hcl"
         -reconfigure
     - terraform apply -auto-approve tfplan
-  dependencies: [plan:app-infra]
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
