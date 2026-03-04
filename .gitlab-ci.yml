@@ -12,6 +12,8 @@ stages:
   - build-agent
   - plan
   - apply
+  - test
+  - secret-detection
 
 variables:
   AWS_DEFAULT_REGION: eu-central-1
